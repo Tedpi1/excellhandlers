@@ -1,70 +1,75 @@
 import openpyxl
-from openpyxl.styles import PatternFill
+import pandas as pd
+from thefuzz import fuzz
 import tkinter as tk
 from tkinter import filedialog
-from thefuzz import fuzz  # Fuzzy matching library
 
 
-def highlight_similar_names(file_path, similarity_threshold=80):
-    # Load the Excel workbook
-    wb = openpyxl.load_workbook(file_path)
-    ws = wb.active  # Select the active sheet
+def merge_similar_items(file_path, similarity_threshold=80):
+    # Load Excel file into a DataFrame
+    df = pd.read_excel(file_path)
 
-    # Identify the "ItemName" column
-    header = [cell.value for cell in ws[1]]  # Read first row as headers
-    if "ItemName" not in header:
-        print("Error: 'ItemName' column not found.")
+    # Ensure required columns exist
+    required_columns = {"ItemId", "ItemCode", "ItemName"}
+    if not required_columns.issubset(df.columns):
+        print("Error: Required columns (ItemId, ItemCode, ItemName) not found!")
         return
 
-    itemname_col = header.index("ItemName") + 1  # Convert to 1-based index
+    merged_items = []
+    matched = set()
 
-    # Read all item names with their row numbers
-    item_names = {}
-    for row in range(2, ws.max_row + 1):
-        name = ws.cell(row=row, column=itemname_col).value
-        if name:
-            item_names[row] = (
-                name.strip().lower()
-            )  # Store row number and lowercase name
+    for i, row in df.iterrows():
+        if i in matched:
+            continue  # Skip already merged items
 
-    # Compare all item names to find similar ones
-    rows_to_highlight = set()
-    item_keys = list(item_names.keys())
+        current_name = row["ItemName"]
+        similar_rows = [row]
 
-    for i in range(len(item_keys)):
-        for j in range(i + 1, len(item_keys)):  # Avoid duplicate comparisons
-            name1 = item_names[item_keys[i]]
-            name2 = item_names[item_keys[j]]
-            similarity_score = fuzz.ratio(name1, name2)  # Compute similarity
+        for j, other_row in df.iterrows():
+            if i != j and j not in matched:
+                other_name = other_row["ItemName"]
+                similarity_score = fuzz.ratio(
+                    str(current_name).lower(), str(other_name).lower()
+                )
 
-            if similarity_score >= similarity_threshold:
-                rows_to_highlight.add(item_keys[i])
-                rows_to_highlight.add(item_keys[j])
+                if similarity_score >= similarity_threshold:
+                    similar_rows.append(other_row)
+                    matched.add(j)
 
-    # Highlight similar names in yellow
-    yellow_fill = PatternFill(
-        start_color="FFFF00", end_color="FFFF00", fill_type="solid"
-    )
-    for row in rows_to_highlight:
-        ws.cell(row=row, column=itemname_col).fill = (
-            yellow_fill  # Highlight ItemName column
+        # Merge similar items
+        merged_item = similar_rows[0].copy()
+        merged_item["ItemName"] = (
+            f"{merged_item['ItemName']} (Merged {len(similar_rows)} items)"
         )
 
-    # Save the modified workbook
-    output_file = file_path.replace(".xlsx", "_highlighted.xlsx")
-    wb.save(output_file)
-    print(f"✅ Similar item names highlighted in 'ItemName'.\nSaved as: {output_file}")
+        # If there's a quantity column, sum up the values
+        if "Quantity" in df.columns:
+            merged_item["Quantity"] = sum(
+                item["Quantity"]
+                for item in similar_rows
+                if pd.notnull(item["Quantity"])
+            )
+
+        merged_items.append(merged_item)
+
+    # Create a new DataFrame with merged results
+    merged_df = pd.DataFrame(merged_items)
+
+    # Save the merged data
+    output_file = file_path.replace(".xlsx", "_merged.xlsx")
+    merged_df.to_excel(output_file, index=False)
+    print(f"✅ Merged similar items. Saved as: {output_file}")
 
 
 def upload_file():
-    # Open a file dialog for the user to choose an Excel file
+    # Open file dialog to let the user choose an Excel file
     root = tk.Tk()
     root.withdraw()  # Hide the main window
     file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
 
     if file_path:
         print(f"📂 File selected: {file_path}")
-        highlight_similar_names(file_path)
+        merge_similar_items(file_path)
 
 
 # Run the file upload function
